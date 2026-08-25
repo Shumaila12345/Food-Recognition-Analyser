@@ -16,6 +16,12 @@ from database import (
 
 # ---------- SETUP ----------
 load_dotenv()
+# Streamlit Cloud uses st.secrets instead of a local .env file — 
+# this makes the app work in both environments without code changes.
+if "GEMINI_API_KEY" in st.secrets:
+    os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+if "USDA_API_KEY" in st.secrets:
+    os.environ["USDA_API_KEY"] = st.secrets["USDA_API_KEY"]
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 usda_api_key = os.environ["USDA_API_KEY"]
 
