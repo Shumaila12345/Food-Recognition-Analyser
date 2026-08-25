@@ -1,12 +1,18 @@
 import os
 import json
+import re
 import requests
 import streamlit as st
 import plotly.graph_objects as go
+import uuid
+import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from database import init_db, save_analysis, get_all_history, delete_history_item, clear_all_history
+from database import (
+    init_db, save_analysis, get_all_history, delete_history_item,
+    clear_all_history, create_user, verify_login,
+)
 
 # ---------- SETUP ----------
 load_dotenv()
@@ -16,6 +22,11 @@ usda_api_key = os.environ["USDA_API_KEY"]
 st.set_page_config(page_title="AI Food Analyzer", page_icon="🍽️", layout="centered")
 init_db()
 
+# Folder where every real user-uploaded/captured photo gets saved.
+# Created once at startup. Nothing is ever pre-placed here — only
+# runtime images from st.file_uploader() / st.camera_input().
+os.makedirs("saved_images", exist_ok=True)
+
 # ---------- GLOBAL STYLING ----------
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -23,7 +34,13 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Poppins', sans-serif; }
 
     .stApp {
-        background: linear-gradient(180deg, #FDFCF7 0%, #F1F8F3 100%);
+        background:
+            radial-gradient(650px circle at 8% 12%, rgba(129,199,132,0.35), transparent 70%),
+            radial-gradient(600px circle at 92% 18%, rgba(255,183,77,0.30), transparent 70%),
+            radial-gradient(700px circle at 15% 88%, rgba(255,183,77,0.22), transparent 70%),
+            radial-gradient(650px circle at 88% 85%, rgba(67,160,71,0.25), transparent 70%),
+            linear-gradient(180deg, #FDFCF7 0%, #F1F8F3 100%);
+        background-attachment: fixed;
     }
 
     section[data-testid="stSidebar"] {
@@ -41,6 +58,13 @@ st.markdown("""
     }
     .hero-box .main-title { color: #14311A; }
     .hero-box .subtitle { color: #2E2E2E; font-weight: 500; }
+
+    /* Compact hero variant for the login/signup screen — the full hero is
+       right for Home where it's the page's whole content, but here it was
+       competing with the actual task (logging in) for attention. */
+    .hero-box.auth-hero {
+        padding: 22px 30px; text-align: center; margin-bottom: 14px;
+    }
 
     .feature-card {
         background-color: #FFFFFF; border-radius: 18px; padding: 24px 16px;
@@ -89,22 +113,164 @@ st.markdown("""
     }
     .stButton>button:hover { opacity: 0.88; color: white; }
 
+    /* Form submit buttons (st.form_submit_button) use a different internal
+       tag than st.button, so they need their own matching rule — otherwise
+       they render as plain unstyled white buttons. */
+    [data-testid="stFormSubmitButton"] button {
+        border-radius: 12px; font-weight: 700; border: none;
+        background: linear-gradient(135deg, #43A047, #1B5E20);
+        color: white !important; padding: 12px 0; font-size: 1rem;
+        transition: opacity 0.2s ease;
+    }
+    [data-testid="stFormSubmitButton"] button:hover { opacity: 0.88; }
+    [data-testid="stFormSubmitButton"] button p { color: white !important; }
+
     [data-testid="stFileUploader"] {
         background-color: #FFFFFF; border-radius: 16px; padding: 12px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
+
+    /* ---- Bordered containers (login card, analyze card) ---- */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 22px !important;
+        border-color: #E3EFE4 !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.07);
+    }
+
+    /* ---- Tabs (Login / Sign Up) ---- */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        gap: 6px; background: #E8F5E9; padding: 6px; border-radius: 14px;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab"] {
+        height: 44px; border-radius: 10px; color: #2E7D32; font-weight: 700;
+        background: transparent; transition: all 0.15s ease;
+    }
+    [data-testid="stTabs"] [aria-selected="true"] {
+        background: linear-gradient(135deg, #43A047, #1B5E20) !important;
+        color: white !important;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab-highlight"],
+    [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
+
+    /* ---- Text inputs ---- */
+    [data-testid="stTextInput"] input {
+        border-radius: 12px !important; border: 1.5px solid #DCEFE0 !important;
+        padding: 10px 14px !important; background: #FAFDFB !important;
+    }
+    [data-testid="stTextInput"] input:focus {
+        border-color: #43A047 !important; box-shadow: 0 0 0 3px rgba(67,160,71,0.15) !important;
+    }
+
+    /* ---- Pill-style radio (input method chooser) ---- */
+    div[role="radiogroup"] { gap: 10px; }
+    div[role="radiogroup"] > label {
+        background: #FFFFFF; border: 1.5px solid #E0E0E0; padding: 10px 22px;
+        border-radius: 999px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        transition: all 0.15s ease;
+    }
+    div[role="radiogroup"] > label:has(input:checked) {
+        background: linear-gradient(135deg, #43A047, #1B5E20); border-color: transparent;
+    }
+    div[role="radiogroup"] > label:has(input:checked) p { color: white !important; font-weight: 700; }
+    div[role="radiogroup"] > label > div:first-child { display: none; }
+
+    /* Sidebar nav uses the same pill radio — restyle for the dark background */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        background: rgba(255,255,255,0.07); border: none; border-radius: 12px;
+        padding: 10px 16px; box-shadow: none;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+        background: rgba(255,255,255,0.22);
+    }
+
+    /* ---- Compact page-header banner (used on Analyze Food, etc.) ---- */
+    .page-header-box {
+        background: linear-gradient(135deg, #81C784 0%, #FFB74D 100%);
+        border-radius: 20px; padding: 24px 30px; margin-bottom: 20px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.10);
+    }
+    .page-header-box .main-title { color: #14311A; font-size: 1.7rem; margin-bottom: 4px; }
+    .page-header-box .subtitle { color: #2E2E2E; margin-bottom: 0; font-weight: 500; }
+
+    .section-label {
+        font-weight: 700; color: #2E7D32; font-size: 0.95rem;
+        display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- SIDEBAR NAVIGATION ----------
+
+# ================= AUTH GATE =================
+# Nothing below this block renders until a user is logged in.
+if "user_id" not in st.session_state:
+    st.markdown("""
+    <div class="hero-box auth-hero">
+        <span style="font-size:2.2rem;">🍽️</span>
+        <h1 class="main-title" style="font-size:1.6rem; margin-top:6px;">AI Food Recognition &amp; Nutrition Analyzer</h1>
+        <p class="subtitle" style="margin-bottom:0;">Log in or create an account to start analyzing your meals.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.container(border=True):
+        login_tab, signup_tab = st.tabs(["🔐 Login", "🆕 Sign Up"])
+
+        with login_tab:
+            with st.form("login_form"):
+                login_username = st.text_input("Username", key="login_username")
+                login_password = st.text_input("Password", type="password", key="login_password")
+                submitted = st.form_submit_button("Login", use_container_width=True)
+
+            if submitted:
+                if not login_username or not login_password:
+                    st.error("Please enter both a username and password.")
+                else:
+                    user_id = verify_login(login_username, login_password)
+                    if user_id is None:
+                        st.error("Incorrect username or password.")
+                    else:
+                        st.session_state["user_id"] = user_id
+                        st.session_state["username"] = login_username.strip()
+                        st.rerun()
+
+        with signup_tab:
+            with st.form("signup_form"):
+                new_username = st.text_input("Choose a username", key="signup_username")
+                new_password = st.text_input("Choose a password", type="password", key="signup_password")
+                confirm_password = st.text_input("Confirm password", type="password", key="signup_confirm")
+                signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
+
+            if signup_submitted:
+                if not new_username or not new_password:
+                    st.error("Please fill in all fields.")
+                elif len(new_password) < 4:
+                    st.error("Password must be at least 4 characters.")
+                elif new_password != confirm_password:
+                    st.error("Passwords don't match.")
+                else:
+                    created = create_user(new_username, new_password)
+                    if created:
+                        st.success("Account created! Please log in from the Login tab.")
+                    else:
+                        st.error("That username is already taken. Please choose another.")
+
+    st.stop()  # Nothing past this point runs until logged in.
+
+
+# ================= SIDEBAR NAVIGATION (logged-in only) =================
 if "page" not in st.session_state:
     st.session_state["page"] = "Home"
 
 with st.sidebar:
     st.markdown("## 🍽️ Food Analyzer")
+    st.markdown(f"Logged in as **{st.session_state['username']}**")
     page = st.radio("Navigate", ["Home", "Analyze Food", "History", "About"],
                      index=["Home", "Analyze Food", "History", "About"].index(st.session_state["page"]))
     st.session_state["page"] = page
+
+    if st.button("🚪 Logout"):
+        for key in ("user_id", "username", "page", "detected_foods", "portions", "current_image_path"):
+            st.session_state.pop(key, None)
+        st.rerun()
 
 
 # ---------- SHARED FUNCTIONS ----------
@@ -144,37 +310,113 @@ def detect_food(image_bytes):
     return unique_detected
 
 
-def get_nutrition(food_name):
-    """Returns nutrition dict, or None if either no match was found OR the
-    API call itself failed (network issue, timeout, etc.)."""
+def _match_score(query_words, description):
+    """Jaccard similarity between the query's words and the USDA result's
+    description words: (shared words) / (all unique words across both).
+    This penalizes long, wordy descriptions that only happen to share ONE
+    word with the query — e.g. "lemon wedge" sharing just "wedge" with a
+    7-word potato description now scores much lower than a short, precise
+    "Lemon, raw" that shares "lemon". Plain word-overlap (used before)
+    couldn't tell those apart, which is why "wedge" kept winning."""
+    desc_words = set(re.findall(r"[a-z]+", description.lower()))
+    if not query_words or not desc_words:
+        return 0.0
+    shared = query_words & desc_words
+    union = query_words | desc_words
+    return len(shared) / len(union)
+
+
+def get_nutrition(food_name, max_retries=5):
+    """Returns (nutrition_dict, matched_description), or (None, None) if no
+    good match was found OR the API call failed after retries.
+
+    USDA's search is plain keyword matching — it will happily return
+    "Potato wedges" for a query of "lemon wedge" just because they share
+    the word "wedge". To avoid silently using the wrong food's nutrition,
+    this fetches several candidates and picks the one whose words overlap
+    the query best (see _match_score), instead of always trusting result #1.
+
+    Retries with increasing backoff because this network intermittently
+    fails to reach USDA's real server and gets a non-JSON error page
+    instead — usually resolves within a few attempts, but occasionally
+    needs more than 3, hence 5 tries with growing wait times."""
     url = "https://api.nal.usda.gov/fdc/v1/foods/search"
-    params = {"query": food_name, "api_key": usda_api_key, "pageSize": 1}
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-    except (requests.exceptions.RequestException, ValueError):
-        return None
+    params = {"query": food_name, "api_key": usda_api_key, "pageSize": 10}
 
-    if not data.get("foods"):
-        return None
+    data = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+            print(f"[DEBUG] '{food_name}' -> HTTP {response.status_code} (attempt {attempt})")
+            break  # success, stop retrying
+        except requests.exceptions.RequestException as e:
+            print(f"[DEBUG] '{food_name}' -> REQUEST FAILED (attempt {attempt}): {type(e).__name__}: {e}")
+        except ValueError:
+            print(f"[DEBUG] '{food_name}' -> BAD JSON (attempt {attempt}), likely a transient network "
+                  f"error page instead of the real API response. Retrying..." if attempt < max_retries
+                  else f"[DEBUG] '{food_name}' -> BAD JSON on final attempt, giving up.")
+        time.sleep(min(0.5 * attempt, 3))  # growing backoff: 0.5s, 1s, 1.5s, 2s, 2.5s (capped at 3s)
 
-    top_result = data["foods"][0]
+    if data is None:
+        return None, None
+
+    candidates = data.get("foods", [])
+    if not candidates:
+        print(f"[DEBUG] '{food_name}' -> 0 foods in response. Full response: {data}")
+        return None, None
+
+    query_words = set(re.findall(r"[a-z]+", food_name.lower()))
+    # Prefer generic/reference data over branded products when scores tie,
+    # since a specific brand's product is a less representative match for
+    # a plain dish name like "grilled chicken".
+    preferred_types = {"Foundation", "SR Legacy", "Survey (FNDDS)"}
+
+    best = max(
+        candidates,
+        key=lambda c: (
+            _match_score(query_words, c.get("description", "")),
+            1 if c.get("dataType") in preferred_types else 0,
+        ),
+    )
+    score = _match_score(query_words, best.get("description", ""))
+    print(f"[DEBUG] '{food_name}' -> best match: {best.get('description')} (score={score:.2f})")
+
+    if score == 0:
+        # None of the query's words appear in the top candidate at all —
+        # this isn't a real match, just USDA returning "closest" garbage.
+        print(f"[DEBUG] '{food_name}' -> rejected, no shared words with any candidate.")
+        return None, None
+
     nutrients = {}
-    for n in top_result.get("foodNutrients", []):
+    for n in best.get("foodNutrients", []):
         name, value = n.get("nutrientName", ""), n.get("value", 0)
         if "Energy" in name: nutrients["calories"] = value
         elif "Protein" in name: nutrients["protein"] = value
         elif "Carbohydrate" in name: nutrients["carbs"] = value
         elif "Total lipid (fat)" in name: nutrients["fat"] = value
         elif "Fiber" in name: nutrients["fiber"] = value
+        elif "Sugars" in name: nutrients["sugar"] = value
     nutrients["base_serving_g"] = 100
-    return nutrients
+    return nutrients, best.get("description", food_name)
 
 
 def scale_nutrition_to_portion(nutrition, portion_grams):
     base = nutrition.get("base_serving_g", 100)
     scale_factor = portion_grams / base
     return {k: round(v * scale_factor, 1) for k, v in nutrition.items() if k != "base_serving_g"}
+
+
+def save_uploaded_image(image_bytes):
+    """Saves a copy of the user's uploaded/captured photo to saved_images/
+    with a unique filename (so two users' photos never collide), and
+    returns the file path to store in the database. Always real, live
+    user-provided bytes — nothing hardcoded or pre-placed."""
+    filename = f"{uuid.uuid4().hex}.jpg"
+    filepath = os.path.join("saved_images", filename)
+    with open(filepath, "wb") as f:
+        f.write(image_bytes)
+    return filepath
 
 
 def macro_donut(calories, protein, carbs, fat):
@@ -277,7 +519,7 @@ if st.session_state["page"] == "Home":
         st.markdown("""
         <div class="feature-card">
             <div class="feature-icon-circle" style="background:#FFEBEE;">📊</div>
-            <b>Nutrition Breakdown</b><br>Calories, protein, carbs, fat & fiber per item
+            <b>Nutrition Breakdown</b><br>Calories, protein, carbs, fat, fiber & sugar per item
         </div>""", unsafe_allow_html=True)
 
     st.write("")
@@ -288,29 +530,41 @@ if st.session_state["page"] == "Home":
 
 # ================= ANALYZE FOOD PAGE =================
 elif st.session_state["page"] == "Analyze Food":
-    st.markdown('<p class="main-title">Analyze Your Food</p>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle">Upload an image or take a photo directly</p>', unsafe_allow_html=True)
-
-    input_method = st.radio("Choose input method", ["Upload Image", "Take Photo"], horizontal=True)
+    st.markdown("""
+    <div class="page-header-box">
+        <h1 class="main-title">📸 Analyze Your Food</h1>
+        <p class="subtitle">Upload an image or take a photo directly</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Used to force the file_uploader widget to reset when "Remove Image" is clicked
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
 
     image_bytes = None
-    if input_method == "Upload Image":
-        uploaded_file = st.file_uploader("Upload a food image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"],
-                                          key=f"uploader_{st.session_state['uploader_key']}")
-        if uploaded_file:
-            st.image(uploaded_file, caption="Preview", use_container_width=True)
-            if st.button("❌ Remove Image"):
-                st.session_state["uploader_key"] += 1  # changes the widget's key, forcing a fresh empty uploader
-                st.rerun()
-            image_bytes = uploaded_file.read()
-    else:
-        camera_file = st.camera_input("Take a photo of your food")
-        if camera_file:
-            image_bytes = camera_file.read()
+    with st.container(border=True):
+        st.markdown('<div class="section-label">🎯 Choose input method</div>', unsafe_allow_html=True)
+        input_method = st.radio("Choose input method", ["Upload Image", "Take Photo"],
+                                 horizontal=True, label_visibility="collapsed")
+
+        if input_method == "Upload Image":
+            st.markdown('<div class="section-label" style="margin-top:14px;">🖼️ Drop a photo or browse your device</div>',
+                        unsafe_allow_html=True)
+            uploaded_file = st.file_uploader("Upload a food image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"],
+                                              key=f"uploader_{st.session_state['uploader_key']}",
+                                              label_visibility="collapsed")
+            if uploaded_file:
+                st.image(uploaded_file, caption="Preview", use_container_width=True)
+                if st.button("❌ Remove Image"):
+                    st.session_state["uploader_key"] += 1  # changes the widget's key, forcing a fresh empty uploader
+                    st.rerun()
+                image_bytes = uploaded_file.read()
+        else:
+            st.markdown('<div class="section-label" style="margin-top:14px;">📷 Point your camera at your meal</div>',
+                        unsafe_allow_html=True)
+            camera_file = st.camera_input("Take a photo of your food", label_visibility="collapsed")
+            if camera_file:
+                image_bytes = camera_file.read()
 
     if image_bytes and st.button("🔍 Analyze Food", use_container_width=True):
         with st.spinner("Analyzing image..."):
@@ -323,14 +577,18 @@ elif st.session_state["page"] == "Analyze Food":
             st.warning("🤔 We couldn't confidently identify any food in this image. "
                         "Please upload a clearer food photo.")
         else:
+            # Save this photo ONCE per analysis, and reuse the same path for
+            # every food item detected in it (they all came from one image).
+            st.session_state["current_image_path"] = save_uploaded_image(image_bytes)
             st.session_state["detected_foods"] = detected_foods
             st.session_state["portions"] = {item["food"]: 100 for item in detected_foods}
 
     # ---------- RESULTS ----------
     if "detected_foods" in st.session_state:
         detected_foods = st.session_state["detected_foods"]
+        current_image_path = st.session_state.get("current_image_path")
         st.subheader("Detected Foods")
-        total = {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0}
+        total = {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "sugar": 0}
 
         for item in detected_foods:
             food, conf = item["food"], item["confidence"]
@@ -353,13 +611,18 @@ elif st.session_state["page"] == "Analyze Food":
                                            key=f"portion_{food}")
                 st.session_state["portions"][food] = portion
 
-            nutrition = get_nutrition(food)
+            nutrition, matched_description = get_nutrition(food)
             if nutrition:
                 scaled = scale_nutrition_to_portion(nutrition, portion)
-                save_analysis(food, conf, portion, scaled)
+                scaled.setdefault("sugar", 0)  # some foods have no sugar data from USDA
+                save_analysis(st.session_state["user_id"], food, conf, portion, scaled,
+                              image_path=current_image_path)
                 with right:
                     fig = macro_donut(scaled["calories"], scaled["protein"], scaled["carbs"], scaled["fat"])
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+                st.caption(f"📋 Nutrition matched to USDA entry: *{matched_description}* — "
+                           f"double-check this looks right for what you photographed.")
 
                 stats = [
                     ("🔥", "Calories", f"{scaled['calories']}"),
@@ -367,6 +630,7 @@ elif st.session_state["page"] == "Analyze Food":
                     ("🌾", "Carbs", f"{scaled['carbs']}g"),
                     ("🥑", "Fat", f"{scaled['fat']}g"),
                     ("🌿", "Fiber", f"{scaled['fiber']}g"),
+                    ("🍬", "Sugar", f"{scaled['sugar']}g"),
                 ]
                 st.markdown(nutrient_stat_boxes(stats), unsafe_allow_html=True)
                 for k in total: total[k] += scaled.get(k, 0)
@@ -396,6 +660,7 @@ elif st.session_state["page"] == "Analyze Food":
             ("🌾", "Carbs", f"{round(total['carbs'],1)}g"),
             ("🥑", "Fat", f"{round(total['fat'],1)}g"),
             ("🌿", "Fiber", f"{round(total['fiber'],1)}g"),
+            ("🍬", "Sugar", f"{round(total['sugar'],1)}g"),
         ]
         st.markdown(nutrient_stat_boxes(total_stats, dark_mode=True), unsafe_allow_html=True)
 
@@ -406,61 +671,88 @@ elif st.session_state["page"] == "Analyze Food":
         if st.button("🔄 Analyze Another Image"):
             del st.session_state["detected_foods"]
             del st.session_state["portions"]
+            st.session_state.pop("current_image_path", None)
             st.rerun()
 
 
 # ================= HISTORY PAGE =================
 elif st.session_state["page"] == "History":
-    st.markdown('<p class="main-title">📅 Analysis History</p>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle">Your past food analyses</p>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header-box">
+        <h1 class="main-title">📅 Analysis History</h1>
+        <p class="subtitle">Your past food analyses</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    history = get_all_history()
+    history = get_all_history(st.session_state["user_id"])
 
     if not history:
         st.info("No analysis history yet. Analyze a food photo to see it appear here.")
     else:
         if st.button("🗑️ Clear All History"):
-            clear_all_history()
+            clear_all_history(st.session_state["user_id"])
             st.rerun()
 
         for row in history:
             (item_id, food, confidence, serving_size, calories,
-             protein, carbs, fat, fiber, created_at) = row
+             protein, carbs, fat, fiber, sugar, image_path, created_at) = row
 
-            st.markdown(f"""
-            <div class="food-card">
-                <span class="food-name">{food}</span><br>
-                <span class="confidence-badge">📅 {created_at} &nbsp;|&nbsp; Serving: {serving_size}g &nbsp;|&nbsp; Confidence: {round(confidence)}%</span>
-            </div>""", unsafe_allow_html=True)
+            thumb_col, info_col = st.columns([1, 3])
 
-            stats = [
-                ("🔥", "Calories", f"{calories}"),
-                ("💪", "Protein", f"{protein}g"),
-                ("🌾", "Carbs", f"{carbs}g"),
-                ("🥑", "Fat", f"{fat}g"),
-                ("🌿", "Fiber", f"{fiber}g"),
-            ]
-            st.markdown(nutrient_stat_boxes(stats), unsafe_allow_html=True)
+            with thumb_col:
+                if image_path and os.path.exists(image_path):
+                    st.image(image_path, use_container_width=True)
+                else:
+                    st.markdown(
+                        '<div style="width:100%; aspect-ratio:1; background:#F1F8F3; '
+                        'border-radius:12px; display:flex; align-items:center; '
+                        'justify-content:center; font-size:1.6rem;">🍽️</div>',
+                        unsafe_allow_html=True
+                    )
 
-            if st.button(f"Delete this entry", key=f"delete_{item_id}"):
-                delete_history_item(item_id)
-                st.rerun()
+            with info_col:
+                st.markdown(f"""
+                <div class="food-card">
+                    <span class="food-name">{food}</span><br>
+                    <span class="confidence-badge">📅 {created_at} &nbsp;|&nbsp; Serving: {serving_size}g &nbsp;|&nbsp; Confidence: {round(confidence)}%</span>
+                </div>""", unsafe_allow_html=True)
+
+                stats = [
+                    ("🔥", "Calories", f"{calories}"),
+                    ("💪", "Protein", f"{protein}g"),
+                    ("🌾", "Carbs", f"{carbs}g"),
+                    ("🥑", "Fat", f"{fat}g"),
+                    ("🌿", "Fiber", f"{fiber}g"),
+                    ("🍬", "Sugar", f"{sugar if sugar is not None else 0}g"),
+                ]
+                st.markdown(nutrient_stat_boxes(stats), unsafe_allow_html=True)
+
+                if st.button(f"Delete this entry", key=f"delete_{item_id}"):
+                    delete_history_item(item_id, st.session_state["user_id"])
+                    st.rerun()
 
             st.divider()
 
 
 # ================= ABOUT PAGE =================
 elif st.session_state["page"] == "About":
-    st.markdown('<p class="main-title">About This Project</p>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header-box">
+        <h1 class="main-title">ℹ️ About This Project</h1>
+        <p class="subtitle">How it works, and its limitations</p>
+    </div>
+    """, unsafe_allow_html=True)
     st.write("""
     This AI-powered web app analyzes food images and provides estimated nutritional information.
     
     **How it works:**
-    1. Upload or capture a food photo
-    2. Google Gemini Vision AI identifies the food items with confidence scores
-    3. USDA FoodData Central provides nutrition data per food
-    4. Values are scaled to your entered serving size
-    5. A total meal nutrition summary is calculated
+    1. Create an account or log in
+    2. Upload or capture a food photo
+    3. Google Gemini Vision AI identifies the food items with confidence scores
+    4. USDA FoodData Central provides nutrition data per food
+    5. Values are scaled to your entered serving size
+    6. A total meal nutrition summary is calculated
+    7. Every analysis is saved to your own personal history
     
     **Important:** Results are estimates only. Accuracy depends on image quality, 
     lighting, and how visually distinct the food is. Nutrition values may vary 

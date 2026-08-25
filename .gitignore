@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 food_history.db
+saved_images/
