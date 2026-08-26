@@ -97,33 +97,9 @@ streamlit run app.py
 
 ## System Architecture
 
-```
-User
- │
- ▼
-Upload / Capture Food Photo
- │
- ▼
-Streamlit Web Interface
- │
- ▼
-Google Gemini Vision (food identification + confidence scores)
- │
- ▼
-USDA FoodData Central API (nutrition lookup, best-match scoring)
- │
- ▼
-Nutrition Calculation (scaled to serving size)
- │
- ▼
-Results Dashboard (per-item + total meal charts)
- │
- ▼
-SQLite Database (saved per logged-in user)
- │
- ▼
-History Page (view / delete past analyses)
-```
+![System Architecture](screenshots/architecture.png)
+
+The pipeline: a user uploads or captures a food photo → Streamlit handles login and the interface → Google Gemini Vision AI detects food items with confidence scores → USDA FoodData Central provides nutrition data → results are scaled to serving size, displayed on a dashboard, and saved to each user's personal history.
 
 ---
 
@@ -132,6 +108,25 @@ History Page (view / delete past analyses)
 **`users`** — id, username (unique), password_hash, salt, created_at
 
 **`analysis_history`** — id, user_id, detected_food, confidence, serving_size, calories, protein, carbs, fat, fiber, sugar, image_path, created_at
+
+---
+
+## Screenshots
+
+### Home
+![Home](screenshots/home.png)
+
+### Analyze Food
+![Analyze](screenshots/analyze-results.png)
+
+### History
+![History](screenshots/history.png)
+
+---
+
+## Demo Video
+
+[Watch the demo video](your-youtube-link-here)
 
 ---
 
