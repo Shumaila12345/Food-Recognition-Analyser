@@ -116,18 +116,19 @@ The pipeline: a user uploads or captures a food photo → Streamlit handles logi
 ### Home
 ![Home](screenshots/home.png)
 
-### Analyze Food
-![Analyze](screenshots/analyze-results.png)
+ ### Analyze Food
+  ![Food Detection](screenshots/analyze-detection.png)
+   ![Total Nutrition](screenshots/analyze-total.png)
 
 ### History
 ![History](screenshots/history.png)
 
 ---
 
+
 ## Demo Video
 
-[Watch the demo video](your-youtube-link-here)
-
+[Watch the demo video](https://screenrec.com/share/PHaFlkdUgp)
 ---
 
 ## Important Notes on Accuracy
