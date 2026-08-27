@@ -151,6 +151,9 @@ st.markdown("""
         height: 44px; border-radius: 10px; color: #2E7D32; font-weight: 700;
         background: transparent; transition: all 0.15s ease;
     }
+    [data-testid="stTabs"] [data-baseweb="tab"] p {
+        color: #2E7D32 !important;
+    }
     [data-testid="stTabs"] [aria-selected="true"] {
         background: linear-gradient(135deg, #43A047, #1B5E20) !important;
         color: white !important;
