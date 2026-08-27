@@ -151,14 +151,6 @@ st.markdown("""
         height: 44px; border-radius: 10px; color: #2E7D32; font-weight: 700;
         background: transparent; transition: all 0.15s ease;
     }
-    /* Inactive tab: dark green text (readable on the light pill background) */
-    [data-testid="stTabs"] [data-baseweb="tab"]:not([aria-selected="true"]) p {
-        color: #2E7D32 !important;
-    }
-    /* Active tab: white text (readable on its dark green gradient background) */
-    [data-testid="stTabs"] [aria-selected="true"] p {
-        color: white !important;
-    }
     [data-testid="stTabs"] [aria-selected="true"] {
         background: linear-gradient(135deg, #43A047, #1B5E20) !important;
         color: white !important;
@@ -219,6 +211,23 @@ st.markdown("""
     .section-label {
         font-weight: 700; color: #2E7D32; font-size: 0.95rem;
         display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+    }
+
+    /* ---- Tab text visibility fix (placed last so it always wins) ----
+       BaseWeb explicitly sets aria-selected="false" on inactive tabs
+       (rather than omitting the attribute), so we target that directly
+       instead of using :not() — more reliable across BaseWeb versions. */
+    [data-testid="stTabs"] button[aria-selected="false"],
+    [data-testid="stTabs"] button[aria-selected="false"] *,
+    [data-testid="stTabs"] [role="tab"][aria-selected="false"],
+    [data-testid="stTabs"] [role="tab"][aria-selected="false"] * {
+        color: #2E7D32 !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"],
+    [data-testid="stTabs"] button[aria-selected="true"] *,
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"],
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] * {
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
