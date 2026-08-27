@@ -162,9 +162,19 @@ st.markdown("""
     [data-testid="stTextInput"] input {
         border-radius: 12px !important; border: 1.5px solid #DCEFE0 !important;
         padding: 10px 14px !important; background: #FAFDFB !important;
+        color: #1A1A1A !important;
     }
     [data-testid="stTextInput"] input:focus {
         border-color: #43A047 !important; box-shadow: 0 0 0 3px rgba(67,160,71,0.15) !important;
+    }
+
+    /* Force widget labels (Username, Password, etc.) to stay dark and
+       readable, regardless of the visitor's theme setting or device dark
+       mode preference — this was the bug causing invisible text. */
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stWidgetLabel"] label,
+    [data-testid="stWidgetLabel"] {
+        color: #1A1A1A !important;
     }
 
     /* ---- Pill-style radio (input method chooser) ---- */
@@ -298,14 +308,12 @@ def detect_food(image_bytes):
             contents=[types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"), prompt]
         )
     except Exception:
-        # Covers network errors, API downtime, invalid API key, etc.
         return None
 
     try:
         raw_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         detected = json.loads(raw_text)
     except (json.JSONDecodeError, AttributeError):
-        # Gemini sometimes returns text that isn't valid JSON (rare, but possible)
         return None
 
     seen, unique_detected = set(), []
@@ -318,12 +326,7 @@ def detect_food(image_bytes):
 
 def _match_score(query_words, description):
     """Jaccard similarity between the query's words and the USDA result's
-    description words: (shared words) / (all unique words across both).
-    This penalizes long, wordy descriptions that only happen to share ONE
-    word with the query — e.g. "lemon wedge" sharing just "wedge" with a
-    7-word potato description now scores much lower than a short, precise
-    "Lemon, raw" that shares "lemon". Plain word-overlap (used before)
-    couldn't tell those apart, which is why "wedge" kept winning."""
+    description words: (shared words) / (all unique words across both)."""
     desc_words = set(re.findall(r"[a-z]+", description.lower()))
     if not query_words or not desc_words:
         return 0.0
@@ -334,18 +337,7 @@ def _match_score(query_words, description):
 
 def get_nutrition(food_name, max_retries=5):
     """Returns (nutrition_dict, matched_description), or (None, None) if no
-    good match was found OR the API call failed after retries.
-
-    USDA's search is plain keyword matching — it will happily return
-    "Potato wedges" for a query of "lemon wedge" just because they share
-    the word "wedge". To avoid silently using the wrong food's nutrition,
-    this fetches several candidates and picks the one whose words overlap
-    the query best (see _match_score), instead of always trusting result #1.
-
-    Retries with increasing backoff because this network intermittently
-    fails to reach USDA's real server and gets a non-JSON error page
-    instead — usually resolves within a few attempts, but occasionally
-    needs more than 3, hence 5 tries with growing wait times."""
+    good match was found OR the API call failed after retries."""
     url = "https://api.nal.usda.gov/fdc/v1/foods/search"
     params = {"query": food_name, "api_key": usda_api_key, "pageSize": 10}
 
@@ -354,28 +346,21 @@ def get_nutrition(food_name, max_retries=5):
         try:
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
-            print(f"[DEBUG] '{food_name}' -> HTTP {response.status_code} (attempt {attempt})")
-            break  # success, stop retrying
-        except requests.exceptions.RequestException as e:
-            print(f"[DEBUG] '{food_name}' -> REQUEST FAILED (attempt {attempt}): {type(e).__name__}: {e}")
+            break
+        except requests.exceptions.RequestException:
+            pass
         except ValueError:
-            print(f"[DEBUG] '{food_name}' -> BAD JSON (attempt {attempt}), likely a transient network "
-                  f"error page instead of the real API response. Retrying..." if attempt < max_retries
-                  else f"[DEBUG] '{food_name}' -> BAD JSON on final attempt, giving up.")
-        time.sleep(min(0.5 * attempt, 3))  # growing backoff: 0.5s, 1s, 1.5s, 2s, 2.5s (capped at 3s)
+            pass
+        time.sleep(min(0.5 * attempt, 3))
 
     if data is None:
         return None, None
 
     candidates = data.get("foods", [])
     if not candidates:
-        print(f"[DEBUG] '{food_name}' -> 0 foods in response. Full response: {data}")
         return None, None
 
     query_words = set(re.findall(r"[a-z]+", food_name.lower()))
-    # Prefer generic/reference data over branded products when scores tie,
-    # since a specific brand's product is a less representative match for
-    # a plain dish name like "grilled chicken".
     preferred_types = {"Foundation", "SR Legacy", "Survey (FNDDS)"}
 
     best = max(
@@ -386,12 +371,8 @@ def get_nutrition(food_name, max_retries=5):
         ),
     )
     score = _match_score(query_words, best.get("description", ""))
-    print(f"[DEBUG] '{food_name}' -> best match: {best.get('description')} (score={score:.2f})")
 
     if score == 0:
-        # None of the query's words appear in the top candidate at all —
-        # this isn't a real match, just USDA returning "closest" garbage.
-        print(f"[DEBUG] '{food_name}' -> rejected, no shared words with any candidate.")
         return None, None
 
     nutrients = {}
@@ -414,10 +395,6 @@ def scale_nutrition_to_portion(nutrition, portion_grams):
 
 
 def save_uploaded_image(image_bytes):
-    """Saves a copy of the user's uploaded/captured photo to saved_images/
-    with a unique filename (so two users' photos never collide), and
-    returns the file path to store in the database. Always real, live
-    user-provided bytes — nothing hardcoded or pre-placed."""
     filename = f"{uuid.uuid4().hex}.jpg"
     filepath = os.path.join("saved_images", filename)
     with open(filepath, "wb") as f:
@@ -426,7 +403,6 @@ def save_uploaded_image(image_bytes):
 
 
 def macro_donut(calories, protein, carbs, fat):
-    """Donut chart showing protein/carbs/fat split, with total calories in the center."""
     values = [max(protein, 0.01), max(carbs, 0.01), max(fat, 0.01)]
     fig = go.Figure(data=[go.Pie(
         labels=["Protein", "Carbs", "Fat"],
@@ -451,8 +427,6 @@ def macro_donut(calories, protein, carbs, fat):
 
 
 def calorie_gauge(total_calories):
-    """Big circular gauge showing total meal calories, with its OWN solid background
-    (doesn't rely on an outer div, since Streamlit can't nest charts inside markdown divs)."""
     max_range = max(2500, total_calories * 1.3)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -470,17 +444,13 @@ def calorie_gauge(total_calories):
     fig.update_layout(
         height=260,
         margin=dict(t=40, b=20, l=40, r=40),
-        paper_bgcolor="#1B5E20",  # solid color matching the total-box theme
+        paper_bgcolor="#1B5E20",
         font={"color": "white"}
     )
     return fig
 
 
 def nutrient_stat_boxes(stats, dark_mode=False):
-    """Renders a row of colored icon stat boxes instead of plain text numbers.
-    stats: list of (icon, label, value) tuples.
-    Each box carries its OWN solid background (not transparent) so it stays
-    readable no matter what it's placed on top of."""
     box_bg = "#2E7D32" if dark_mode else "#FFFFFF"
     label_color = "rgba(255,255,255,0.85)" if dark_mode else "#666"
     value_color = "#FFFFFF" if dark_mode else "#1A1A1A"
@@ -543,7 +513,6 @@ elif st.session_state["page"] == "Analyze Food":
     </div>
     """, unsafe_allow_html=True)
 
-    # Used to force the file_uploader widget to reset when "Remove Image" is clicked
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
 
@@ -562,7 +531,7 @@ elif st.session_state["page"] == "Analyze Food":
             if uploaded_file:
                 st.image(uploaded_file, caption="Preview", use_container_width=True)
                 if st.button("❌ Remove Image"):
-                    st.session_state["uploader_key"] += 1  # changes the widget's key, forcing a fresh empty uploader
+                    st.session_state["uploader_key"] += 1
                     st.rerun()
                 image_bytes = uploaded_file.read()
         else:
@@ -583,8 +552,6 @@ elif st.session_state["page"] == "Analyze Food":
             st.warning("🤔 We couldn't confidently identify any food in this image. "
                         "Please upload a clearer food photo.")
         else:
-            # Save this photo ONCE per analysis, and reuse the same path for
-            # every food item detected in it (they all came from one image).
             st.session_state["current_image_path"] = save_uploaded_image(image_bytes)
             st.session_state["detected_foods"] = detected_foods
             st.session_state["portions"] = {item["food"]: 100 for item in detected_foods}
@@ -620,7 +587,7 @@ elif st.session_state["page"] == "Analyze Food":
             nutrition, matched_description = get_nutrition(food)
             if nutrition:
                 scaled = scale_nutrition_to_portion(nutrition, portion)
-                scaled.setdefault("sugar", 0)  # some foods have no sugar data from USDA
+                scaled.setdefault("sugar", 0)
                 save_analysis(st.session_state["user_id"], food, conf, portion, scaled,
                               image_path=current_image_path)
                 with right:
@@ -646,11 +613,6 @@ elif st.session_state["page"] == "Analyze Food":
                          f"or note this as a known limitation in your report.")
             st.divider()
 
-        # ---------- TOTAL MEAL NUTRITION ----------
-        # Each piece below (header, gauge, stat boxes) carries its OWN solid background
-        # color, rather than trying to wrap them all in one outer div — Streamlit renders
-        # every st.markdown/st.plotly_chart call as a separate block, so an open <div> in
-        # one call does NOT actually contain elements from later calls.
         st.markdown(
             '<div style="background:linear-gradient(135deg,#1B5E20,#388E3C); '
             'border-radius:22px; padding:20px 20px 10px 20px; margin-top:24px;">'
