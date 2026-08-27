@@ -151,8 +151,13 @@ st.markdown("""
         height: 44px; border-radius: 10px; color: #2E7D32; font-weight: 700;
         background: transparent; transition: all 0.15s ease;
     }
-    [data-testid="stTabs"] [data-baseweb="tab"] p {
+    /* Inactive tab: dark green text (readable on the light pill background) */
+    [data-testid="stTabs"] [data-baseweb="tab"]:not([aria-selected="true"]) p {
         color: #2E7D32 !important;
+    }
+    /* Active tab: white text (readable on its dark green gradient background) */
+    [data-testid="stTabs"] [aria-selected="true"] p {
+        color: white !important;
     }
     [data-testid="stTabs"] [aria-selected="true"] {
         background: linear-gradient(135deg, #43A047, #1B5E20) !important;
